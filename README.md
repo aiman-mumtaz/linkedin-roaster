@@ -30,7 +30,7 @@ A brutally honest roasting tool for LinkedIn profiles. This app uses AI to gener
 
 1. Clone the repository:
 ```bash
-git clone <repo-url>
+git clone https://github.com/aiman-mumtaz/linkedin-roaster.git
 cd linkedin-roaster
 ```
 
