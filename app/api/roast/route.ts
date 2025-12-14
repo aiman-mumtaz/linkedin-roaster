@@ -82,7 +82,7 @@ export async function POST(request: Request) {
             profileData = profileText;
             await page.close();
         } catch (error) {
-            console.error("Error scraping LinkedIn:", error);
+            console.log("Error scraping LinkedIn:", error);
             cachedContext = null; // Clear cache on error
             return NextResponse.json(
                 { error: "Failed to fetch LinkedIn profile. Make sure you've set LINKEDIN_EMAIL and LINKEDIN_PASSWORD in .env.local and the profile URL is correct." },
