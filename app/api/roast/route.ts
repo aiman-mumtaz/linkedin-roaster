@@ -4,9 +4,9 @@ import chromium_serverless from "@sparticuz/chromium";
 import * as path from 'path';
 import * as fs from 'fs';
 
-// Shared context cache. Crucial for subsequent requests.
+// Shared context cache. Crucial for subsequent requests (warm starts).
 let cachedContext: any = null;
-// CRITICAL FIX: Store the parsed JavaScript Object, not the raw string.
+// CRITICAL FIX: Store the parsed JavaScript Object from the state file.
 let savedStorageState: object | undefined = undefined; 
 
 /**
@@ -62,13 +62,13 @@ async function getAuthenticatedContext() {
 
   let launchOptions: any = { headless: true, timeout: 25000 };
   
-  // FIX: Load the storage state OBJECT here
+  // Load the storage state OBJECT here
   const storageStateObject = isProduction ? loadStorageState() : undefined;
 
   const contextOptions: any = {
     ignoreHTTPSErrors: true,
     slowMo: 0,
-    // CRITICAL FIX: Pass the actual JAVASCRIPT OBJECT to storageState
+    // Pass the actual JAVASCRIPT OBJECT to storageState
     storageState: storageStateObject, 
   };
   
@@ -82,7 +82,7 @@ async function getAuthenticatedContext() {
       executablePath: await chromium_serverless.executablePath(),
     };
   } else {
-    // Local Development Setup
+    // Local Development Setup (requires local 'playwright' package)
     try {
       const { chromium } = require('playwright');
       browserExecutable = chromium;
@@ -95,12 +95,12 @@ async function getAuthenticatedContext() {
   const browser = await browserExecutable.launch(launchOptions);
   const context = await browser.newContext(contextOptions);
   
-  // 💡 NEW: Wait for a moment after context creation to ensure stability
+  // Stabilization wait
   await new Promise(resolve => setTimeout(resolve, 500)); 
 
   const page = await context.newPage();
 
-  // HIGH PERFORMANCE: Block non-essential resources on the context level
+  // HIGH PERFORMANCE: Block non-essential resources
   await context.route('**/*', (route: Route) => {
     const resource = route.request().resourceType();
     if (resource === 'image' || resource === 'stylesheet' || resource === 'font') {
@@ -113,8 +113,12 @@ async function getAuthenticatedContext() {
   // 4. Test Session State and Login
   console.log("Testing saved session state...");
   
-  // Try navigating to the feed. If the state loaded, we should be logged in instantly.
-  await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 15000 });
+  // 🚀 OPTIMIZATION 1: Drastically reduce the session test timeout (15s -> 5s)
+  try {
+      await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 5000 });
+  } catch (e) {
+      // Ignore navigation timeout; if it failed, session is likely expired.
+  }
   
   // If we are already logged in, skip the manual credential entry
   if (page.url().includes("feed")) {
@@ -124,7 +128,7 @@ async function getAuthenticatedContext() {
       return context;
   }
   
-  // Fallback: If redirected (session expired or missing state file), perform manual login (risky)
+  // Fallback: Manual login (risky)
   console.log("Session expired or invalid. Performing manual login... (Will likely hit checkpoint)");
   
   const email = process.env.LINKEDIN_EMAIL;
@@ -145,7 +149,7 @@ async function getAuthenticatedContext() {
   await page.fill('input[name="session_password"]', password);
   await page.click('button[type="submit"]');
 
-  // Robust Login Check (same as before)
+  // Robust Login Check 
   try {
     await page.waitForURL("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 20000 });
     console.log("Login successful via URL check.");
@@ -180,8 +184,8 @@ export async function POST(request: Request) {
     try {
       context = await getAuthenticatedContext(); 
       page = await context.newPage();
-      
-      // 💡 NEW: Wait a moment before navigating the new page
+
+      // Stabilization wait
       await page.waitForTimeout(500); 
 
       let profileUrl = profile;
@@ -190,8 +194,9 @@ export async function POST(request: Request) {
       }
       
       console.log(`Scraping profile: ${profileUrl}`);
-      // 💡 INCREASE TIMEOUT: Give navigation more time, just in case.
-      await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 30000 }); 
+      
+      // 🚀 OPTIMIZATION 2: Use networkidle0 (more reliable content) and revert timeout to 15s.
+      await page.goto(profileUrl, { waitUntil: "networkidle0", timeout: 15000 }); 
       
       await page.waitForTimeout(1000); 
 
