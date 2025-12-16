@@ -7,7 +7,7 @@
   # Setting the timeout in seconds. 26s is the maximum.
   # This property is the correct way to specify duration now.
   external_node_modules = ["@sparticuz/chromium", "playwright-core"]
-  max_duration = 26
+  max_duration = 60
 
 [functions]
   # This is the critical fix for bundling the Chromium binaries!

@@ -174,7 +174,7 @@ export async function POST(request: Request) {
       console.log(`Scraping profile: ${profileUrl}`);
       
       // 🚀 AGGRESSIVE NAVIGATION: Use fast domcontentloaded with reduced timeout
-      await page.goto(profileUrl, { waitUntil: "load", timeout: 8000 });
+      await page.goto(profileUrl, { waitUntil: "load", timeout: 45000 });
       
       // 🚀 AGGRESSIVE WAITS: Minimal buffer before scraping (replacing long element waits)
       await page.waitForTimeout(500); 
