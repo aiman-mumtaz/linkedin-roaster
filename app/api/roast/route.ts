@@ -2,37 +2,41 @@ import { NextResponse } from "next/server";
 import { chromium as playwrightChromium, Route } from "playwright-core";
 import chromium_serverless from "@sparticuz/chromium";
 
-// Shared context cache. Crucial for performance (cache hit saves ~25 seconds).
+// Shared context cache. Crucial for subsequent requests.
 let cachedContext: any = null;
 
 /**
- * Initializes or reuses an authenticated Playwright context.
+ * Initializes or reuses an authenticated Playwright context by loading a saved session state.
  */
 async function getAuthenticatedContext() {
   // 1. Re-use cached context
   if (cachedContext) {
     try {
-      // QUICK TEST: Use a very fast page load to confirm the context is alive.
+      // QUICK TEST: Check if the context is alive.
       const page = await cachedContext.newPage();
       await page.goto("about:blank", { timeout: 1000 });
       await page.close();
       console.log("Reusing cached context. Cache hit!");
       return cachedContext;
     } catch (e) {
-      console.error("Cached context stale, failed test. Initiating new session.", e);
+      console.error("Cached context stale, initiating new session.", e);
       cachedContext = null;
     }
   }
 
-  // 2. Setup Launch Logic (Only runs on cold start or cache miss)
+  // 2. Setup Launch Logic
   const isProduction = process.env.NODE_ENV === 'production' || process.env.NETLIFY === 'true';
 
-  let launchOptions: any = { headless: true, timeout: 25000 }; // 25s launch timeout
+  let launchOptions: any = { headless: true, timeout: 25000 };
 
-  const contextOptions = {
+  // --- FIX: Load Session State ---
+  const contextOptions: any = {
     ignoreHTTPSErrors: true,
     slowMo: 0,
+    // CRITICAL: Load the saved session state file on Netlify
+    storageState: isProduction ? './linkedin_state.json' : undefined, 
   };
+  // --- END FIX ---
 
   let browserExecutable = playwrightChromium;
 
@@ -40,7 +44,6 @@ async function getAuthenticatedContext() {
     // Netlify Production Setup
     launchOptions = {
       ...launchOptions,
-      // Added --disable-setuid-sandbox for maximum stability on Linux serverless
       args: chromium_serverless.args.concat(['--disable-setuid-sandbox']), 
       executablePath: await chromium_serverless.executablePath(),
     };
@@ -59,10 +62,9 @@ async function getAuthenticatedContext() {
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
 
-  // HIGH PERFORMANCE: Block all non-essential resources immediately on the context level
+  // HIGH PERFORMANCE: Block non-essential resources on the context level
   await context.route('**/*', (route: Route) => {
     const resource = route.request().resourceType();
-    // Block images, styles, AND fonts to save every millisecond during navigation
     if (resource === 'image' || resource === 'stylesheet' || resource === 'font') {
       route.abort();
     } else {
@@ -70,10 +72,23 @@ async function getAuthenticatedContext() {
     }
   });
 
-  // 4. LinkedIn Login
-  console.log("Navigating to login... (Expect 20-30s on cold start)");
-  await page.goto("https://www.linkedin.com/login", { waitUntil: "domcontentloaded", timeout: 15000 });
-
+  // 4. Test Session State and Login
+  console.log("Testing saved session state...");
+  
+  // Try navigating to the feed. If the state loaded, we should be logged in instantly.
+  await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 15000 });
+  
+  // If we are already logged in, skip the manual credential entry
+  if (page.url().includes("feed")) {
+      console.log("Session state loaded successfully. Bypassing manual login.");
+      await page.close();
+      cachedContext = context;
+      return context;
+  }
+  
+  // Fallback: If redirected (session expired or missing state file), perform manual login (risky)
+  console.log("Session expired or invalid. Performing manual login...");
+  
   const email = process.env.LINKEDIN_EMAIL;
   const password = process.env.LINKEDIN_PASSWORD;
 
@@ -82,41 +97,48 @@ async function getAuthenticatedContext() {
     await browser.close();
     throw new Error("Missing LinkedIn credentials.");
   }
+  
+  // Navigate to login page if we aren't already there
+  if (!page.url().includes("login")) {
+      await page.goto("https://www.linkedin.com/login", { waitUntil: "domcontentloaded", timeout: 15000 });
+  }
 
-  // Type fills and click
   await page.fill('input[name="session_key"]', email);
   await page.fill('input[name="session_password"]', password);
   await page.click('button[type="submit"]');
 
-  // Robust Login Check: Uses element check as a fallback to beat security redirects
+  // Robust Login Check (same as before)
   try {
-    // Option 1: Wait for the standard feed URL (20s)
-    await page.waitForURL("https://www.linkedin.com/feed/", { 
-        waitUntil: "domcontentloaded", 
-        timeout: 20000 
-    });
+    await page.waitForURL("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 20000 });
     console.log("Login successful via URL check.");
     
   } catch (e) {
-    // Option 2: Fallback check for a successful element (the Home link)
     try {
         await page.waitForSelector('nav[aria-label="Primary"] a[href="/feed/"]', { timeout: 10000 });
         console.log("Login successful via element check.");
         
     } catch(e2) {
-        // Both checks failed - assume security challenge or bad credentials.
         const currentUrl = await page.url();
-        console.error("Login failed: neither feed URL nor primary navigation element found. URL:", currentUrl);
-        
+        console.error("Login failed: Checkpoint detected. URL:", currentUrl);
         await context.close();
         await browser.close();
-        
-        throw new Error(`Login failed or hit security challenge. Check credentials and 2FA status.`);
+        throw new Error(`Login failed: Checkpoint detected at ${currentUrl}. Update 'linkedin_state.json'.`);
     }
+  }
+  
+  // Save the newly successful state for the next run (overwriting the old one)
+  if (isProduction) {
+      // NOTE: This only works if your function has write access to its own directory.
+      // If it fails, you will need to manually update the file and commit again.
+      try {
+        await context.storageState({ path: './linkedin_state.json' });
+        console.log("Updated session state saved.");
+      } catch(e) {
+        console.error("Could not save new state file to Netlify environment. Will rely on manual updates.");
+      }
   }
 
   await page.close();
-  // Cache the successfully logged-in context
   cachedContext = context;
   return context;
 }
@@ -130,7 +152,6 @@ export async function POST(request: Request) {
     let context: any;
     let page: any;
     try {
-      // Must be called inside the try/catch block to handle the browser launch failure
       context = await getAuthenticatedContext(); 
       page = await context.newPage();
 
@@ -140,7 +161,6 @@ export async function POST(request: Request) {
       }
       
       console.log(`Scraping profile: ${profileUrl}`);
-      // Navigation should be fast on cache hit.
       await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
       
       await page.waitForTimeout(1000); 
@@ -158,10 +178,9 @@ export async function POST(request: Request) {
 
     } catch (error: any) {
       console.error("Scraping error:", error.message);
-      // Clear the cache to force a fresh session next time
       cachedContext = null; 
       return NextResponse.json(
-        { error: `Scraping failed: ${error.message}. Likely due to 30-second cold-start timeout or LinkedIn security.` },
+        { error: `Scraping failed: ${error.message}.` },
         { status: 400 }
       );
     }
@@ -169,7 +188,7 @@ export async function POST(request: Request) {
     profileData = profile;
   }
 
-  // 6. Groq / AI Logic (Remains unchanged)
+  // 6. Groq / AI Logic (Unchanged)
   try {
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
