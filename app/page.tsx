@@ -44,7 +44,7 @@ export default function Home() {
       <div className="flex-1 flex items-center justify-center">
         <div className="w-full max-w-2xl bg-slate-900 rounded-lg p-8 shadow-2xl border border-slate-700">
           <div className="mb-6">
-            <h1 className="text-4xl font-bold text-gray-100 animate-slide-up mb-2">
+            <h1 className="text-4xl font-bold text-gray-100 mb-2">
               Profile Roaster
             </h1>
             <p className="text-gray-400 text-base">Get a brutally honest roast of any LinkedIn profile</p>
@@ -73,9 +73,9 @@ export default function Home() {
             <div className="mt-6 bg-slate-800 rounded-lg p-6 text-gray-100 leading-relaxed animate-fade-in border border-slate-700 shadow-lg">
               <p className="text-sm font-bold text-blue-400 uppercase tracking-wide mb-4">Your Roast</p>
               <div className="space-y-4">
-                {roast.split('. ').map((sentence, idx) => (
-                  <p key={idx} className="text-base leading-relaxed">
-                    {sentence.endsWith('.') ? sentence : sentence + '.'}
+                {roast.split(". ").map((sentence, idx) => (
+                  <p key={idx}>
+                    {sentence.endsWith(".") ? sentence : sentence + "."}
                   </p>
                 ))}
               </div>
