@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { chromium as playwrightChromium, Route } from "playwright-core";
+import { chromium as playwrightChromium, Response, Route } from "playwright-core";
 import chromium_serverless from "@sparticuz/chromium";
 import * as path from 'path';
 import * as fs from 'fs';
@@ -172,29 +172,37 @@ export async function POST(request: Request) {
       }
       
       console.log(`Scraping profile: ${profileUrl}`);
-      
-      // 🚀 AGGRESSIVE NAVIGATION: Use fast domcontentloaded with reduced timeout
-      await page.goto(profileUrl, { waitUntil: "load", timeout: 45000 });
-      
-      // 🚀 AGGRESSIVE WAITS: Minimal buffer before scraping (replacing long element waits)
-      await page.waitForTimeout(500); 
 
-      const profileText = await page.evaluate(() => {
-        const bodyText = document.body.innerText;
-        return bodyText
-          .replace(/Follow|Connect|Message|Premium|Promoted|Skip to main content/g, '')
-          .replace(/\s\s+/g, ' ')
-          .trim();
-      });
+      // 1. Set up a listener to capture the crucial network response
+      const profileDataPromise = page.waitForResponse((response : Response) =>
+        // Targeting the general GraphQL API which handles most content loading
+        response.url().includes('/graphql') &&
+        response.status() === 200
+      , { timeout: 15000 }); // Generous 15s wait for the API data
 
-      profileData = profileText;
+      // 2. Start the navigation (This triggers the hidden API call)
+      // Use "domcontentloaded" as it's often more reliable for triggering API calls than "load"
+      await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 10000 }); 
+      
+      // 3. Await the structured data response
+      const apiResponse = await profileDataPromise;
+      
+      // 4. Extract the JSON payload
+      const jsonResponse = await apiResponse.json();
+      
+      // 5. Convert JSON to a robust string for the AI 
+      profileData = JSON.stringify(jsonResponse, null, 2); 
+      
+      console.log("Successfully extracted profile data via API interception.");
+
       await page.close();
 
     } catch (error: any) {
-      console.error("Scraping error:", error.message);
+      // If the fast path fails, we fail fast.
+      console.error("Scraping failed during API interception. Check API URL or increase Netlify Memory limit.", error.message);
       cachedContext = null; 
       return NextResponse.json(
-        { error: `Scraping failed: ${error.message}.` },
+        { error: `Scraping failed: ${error.message}. The browser likely ran out of memory.` },
         { status: 400 }
       );
     }
