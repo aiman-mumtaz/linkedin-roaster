@@ -6,12 +6,11 @@ import * as fs from 'fs';
 
 // Shared context cache. Crucial for subsequent requests (warm starts).
 let cachedContext: any = null;
-// CRITICAL FIX: Store the parsed JavaScript Object from the state file.
+// Stores the parsed JavaScript Object from the state file.
 let savedStorageState: object | undefined = undefined; 
 
 /**
  * Reads the 'linkedin_state.json' file content, parses it, and caches the object.
- * This function runs on every invocation but only reads the file once (on cold start).
  */
 function loadStorageState(): object | undefined {
   if (savedStorageState) {
@@ -19,33 +18,27 @@ function loadStorageState(): object | undefined {
   }
   
   try {
-    // Determine the correct file path relative to the execution environment (process.cwd())
     const filePath = path.join(process.cwd(), 'linkedin_state.json');
-    
-    // Read the file content as a STRING
     const fileContentString = fs.readFileSync(filePath, 'utf-8');
     
-    // CRITICAL FIX: PARSE THE STRING INTO A JAVASCRIPT OBJECT 
-    // Playwright needs the object, not the path or the raw string content.
+    // CRITICAL FIX: Parse the string into a JavaScript OBJECT
     savedStorageState = JSON.parse(fileContentString);
     
     console.log("Successfully loaded and PARSED storage state object.");
     return savedStorageState;
   } catch (e) {
-    console.error("CRITICAL: Failed to load or parse linkedin_state.json. Check file path, JSON format, and ensure the file is committed.", e);
-    // If loading fails, fall back to undefined, forcing the manual login attempt below.
+    console.error("CRITICAL: Failed to load or parse linkedin_state.json. Falling back to manual login.", e);
     return undefined;
   }
 }
 
 /**
- * Initializes or reuses an authenticated Playwright context by loading a saved session state.
+ * Initializes or reuses an authenticated Playwright context, prioritizing saved state.
  */
 async function getAuthenticatedContext() {
   // 1. Re-use cached context
   if (cachedContext) {
     try {
-      // QUICK TEST: Check if the context is alive.
       const page = await cachedContext.newPage();
       await page.goto("about:blank", { timeout: 1000 });
       await page.close();
@@ -62,7 +55,6 @@ async function getAuthenticatedContext() {
 
   let launchOptions: any = { headless: true, timeout: 25000 };
   
-  // Load the storage state OBJECT here
   const storageStateObject = isProduction ? loadStorageState() : undefined;
 
   const contextOptions: any = {
@@ -94,9 +86,6 @@ async function getAuthenticatedContext() {
   // 3. Launch Browser and Create Context
   const browser = await browserExecutable.launch(launchOptions);
   const context = await browser.newContext(contextOptions);
-  
-  // Stabilization wait
-  await new Promise(resolve => setTimeout(resolve, 500)); 
 
   const page = await context.newPage();
 
@@ -111,25 +100,18 @@ async function getAuthenticatedContext() {
   });
 
   // 4. Test Session State and Login
-  console.log("Testing saved session state...");
   
-  // 🚀 OPTIMIZATION 1: Drastically reduce the session test timeout (15s -> 5s)
-  try {
-      await page.goto("https://www.linkedin.com/feed/", { waitUntil: "domcontentloaded", timeout: 5000 });
-  } catch (e) {
-      // Ignore navigation timeout; if it failed, session is likely expired.
-  }
-  
-  // If we are already logged in, skip the manual credential entry
-  if (page.url().includes("feed")) {
-      console.log("Session state loaded successfully. Bypassing manual login.");
+  // 🚀 HYPER-AGGRESSIVE OPTIMIZATION: Trust the loaded state, skip navigation test
+  if (storageStateObject) {
+      // We skip the 5-second navigation check entirely, saving critical time.
+      console.log("Session state loaded successfully. Trusting state and bypassing login test.");
       await page.close();
       cachedContext = context;
       return context;
   }
   
-  // Fallback: Manual login (risky)
-  console.log("Session expired or invalid. Performing manual login... (Will likely hit checkpoint)");
+  // Fallback: Manual login (only executes if state file was missing/failed to load)
+  console.log("Storage state was NOT loaded. Performing manual login... (Will likely hit checkpoint)");
   
   const email = process.env.LINKEDIN_EMAIL;
   const password = process.env.LINKEDIN_PASSWORD;
@@ -140,7 +122,6 @@ async function getAuthenticatedContext() {
     throw new Error("Missing LinkedIn credentials.");
   }
   
-  // Navigate to login page if we aren't already there
   if (!page.url().includes("login")) {
       await page.goto("https://www.linkedin.com/login", { waitUntil: "domcontentloaded", timeout: 15000 });
   }
@@ -185,9 +166,6 @@ export async function POST(request: Request) {
       context = await getAuthenticatedContext(); 
       page = await context.newPage();
 
-      // Stabilization wait
-      await page.waitForTimeout(500); 
-
       let profileUrl = profile;
       if (!profileUrl.startsWith("http")) {
         profileUrl = "https://" + profileUrl;
@@ -195,10 +173,11 @@ export async function POST(request: Request) {
       
       console.log(`Scraping profile: ${profileUrl}`);
       
-      // 🚀 OPTIMIZATION 2: Use networkidle0 (more reliable content) and revert timeout to 15s.
-      await page.goto(profileUrl, { waitUntil: "networkidle0", timeout: 15000 }); 
+      // 🚀 AGGRESSIVE NAVIGATION: Use fast domcontentloaded with reduced timeout
+      await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 10000 }); 
       
-      await page.waitForTimeout(1000); 
+      // 🚀 AGGRESSIVE WAITS: Minimal buffer before scraping (replacing long element waits)
+      await page.waitForTimeout(500); 
 
       const profileText = await page.evaluate(() => {
         const bodyText = document.body.innerText;
