@@ -101,11 +101,20 @@ export default function Home() {
                 Your Roast
               </p>
               <div className="space-y-4">
-                {roast.split(". ").map((sentence, idx) => (
-                  <p key={idx}>
-                    {sentence.endsWith(".") ? sentence : sentence + "."}
-                  </p>
-                ))}
+                {
+                roast.includes('Aiman') ? (
+                  roast.split("? ").map((sentence, idx) => (
+                    <p key={idx}>
+                      {sentence}
+                    </p>
+                  ))
+                ) : (
+                  roast.split(". ").map((sentence, idx) => (
+                    <p key={idx}>
+                      {sentence.endsWith(".") ? sentence : sentence + "."}
+                    </p>
+                  ))
+                )}
               </div>
             </div>
           )}
